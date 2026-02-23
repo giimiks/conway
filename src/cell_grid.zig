@@ -1,5 +1,23 @@
 const std = @import("std");
+const rl = @import("raylib");
 const Allocator = std.mem.Allocator;
+
+const alive: u32 = 0xFF000000;
+const dead: u32 = 0xFFFFFFFF;
+
+fn buildByteLut() [256][8]u32 {
+    var lut: [256][8]u32 = undefined;
+    var b: usize = 0;
+    @setEvalBranchQuota(3000);
+    while (b < 256) : (b += 1) {
+        inline for (0..8) |i| {
+            lut[b][i] = if (((b >> i) & 1) == 1) alive else dead;
+        }
+    }
+    return lut;
+}
+
+const LUT = buildByteLut();
 
 ///Grid is a u64 array bitmap stored row-wise. Use .init() to initialise the grid safely with zeroed out memory. Use .deinit() to dealocate.
 pub const Cell_grid = struct {
@@ -9,17 +27,12 @@ pub const Cell_grid = struct {
     w_offset: u32,
     grid: []u64,
     rgba32: []u32,
+
     allocator: Allocator,
+
     pub fn init(width: u32, height: u32, allocator: Allocator) !Cell_grid {
         const w_offset = (width + 63) / 64;
-        const self = Cell_grid{
-            .width = width,
-            .height = height,
-            .w_offset = w_offset,
-            .grid = try allocator.alloc(u64, w_offset * height),
-            .rgba32 = try allocator.alloc(u32, w_offset * height * 64),
-            .allocator = allocator,
-        };
+        const self = Cell_grid{ .width = width, .height = height, .w_offset = w_offset, .grid = try allocator.alloc(u64, w_offset * height), .rgba32 = try allocator.alloc(u32, w_offset * height * 64), .allocator = allocator };
         @memset(self.grid, 0);
         @memset(self.rgba32, std.math.maxInt(u32));
         return self;
@@ -46,40 +59,29 @@ pub const Cell_grid = struct {
         self.grid[loc.row_idx] = self.grid[loc.row_idx] ^ loc.mask;
         return (self.grid[loc.row_idx] & loc.mask) != 0;
     }
-    fn buildByteLut(comptime alive: u32, comptime dead: u32) [256][8]u32 {
-        var lut: [256][8]u32 = undefined;
-        var b: usize = 0;
-        while (b < 256) : (b += 1) {
-            inline for (0..8) |i| {
-                lut[b][i] = if (((b >> i) & 1) == 1) alive else dead;
-            }
-        }
-        return lut;
-    }
 
     pub fn map_grid_to_rgba32(self: *Cell_grid) void {
-        const dead: u32 = 0xFFFFFFFF;
-        const alive: u32 = 0xFF000000;
-        const lut = comptime buildByteLut(alive, dead);
-
         const words_per_row: usize = self.w_offset;
         const rows: usize = self.height;
 
         for (0..rows) |y| {
             const word_row_base = y * words_per_row;
             const px_row_base = y * words_per_row * 64;
-
             for (0..words_per_row) |xw| {
                 const word = self.grid[word_row_base + xw];
                 const px_base = px_row_base + xw * 64;
 
                 inline for (0..8) |k| {
                     const byte: u8 = @intCast((word >> @intCast(k * 8)) & 0xFF);
-                    const entry = lut[byte];
+                    const entry = LUT[byte];
                     const dst = self.rgba32[(px_base + k * 8)..(px_base + k * 8 + 8)];
                     inline for (0..8) |i| dst[i] = entry[i];
                 }
             }
         }
+    }
+
+    pub fn alive_add(self: *Cell_grid, xy: rl.Vector2) void {
+        self.alive_cells.append(self.allocator, xy);
     }
 };

@@ -4,16 +4,27 @@ const cg = @import("cell_grid.zig");
 const Game_phase = enum { PREP, RUNNING };
 const c = std.c;
 
-fn handle_keyevents() void {
-    return;
+fn get_scaling_factor(tw: f32, th: f32, sw: f32, sh: f32) f32 {
+    return @min(sw / tw, sh / th);
 }
 
-fn update_phase(phase: *Game_phase, _: cg.Cell_grid) anyerror!u8 {
-    if (rl.isKeyReleased(rl.KeyboardKey.space)) {
-        if (phase.* == Game_phase.PREP) {
-            phase.* = Game_phase.RUNNING;
-        } else {
-            phase.* = Game_phase.PREP;
+fn scale_texture_to_screen(texture: rl.Texture, screen_w: i32, screen_h: i32) rl.Rectangle {
+    const scale = get_scaling_factor(@as(f32, @floatFromInt(texture.width)), @as(f32, @floatFromInt(texture.height)), @as(f32, @floatFromInt(screen_w)), @as(f32, @floatFromInt(screen_h)));
+    return rl.Rectangle.init(0, 0, @as(f32, @floatFromInt(texture.width)) * scale, @as(f32, @floatFromInt(texture.height)) * scale);
+}
+
+fn get_clicked_cell(mx: f32, my: f32, screen_w: i32, screen_h: i32, tex_w: u32, tex_h: u32) rl.Vector2 {
+    const scale = get_scaling_factor(@floatFromInt(tex_w), @floatFromInt(tex_h), @floatFromInt(screen_w), @floatFromInt(screen_h));
+    const pos_x = mx / scale;
+    const pos_y = my / scale;
+    return rl.Vector2{ .x = @floor(pos_x), .y = @floor(pos_y) };
+}
+
+fn conway_advance(celg: cg.Cell_grid) void {
+    for (0..celg.width) |w| {
+        for (0..celg.height) |h| {
+            const cell = celg.get_bit_at(w, h);
+            if (cell == true) {}
         }
     }
 }
@@ -37,6 +48,7 @@ pub fn main() anyerror!u8 {
             std.debug.print("{any}", .{err});
             return 0;
         };
+
         grid_h = std.fmt.parseInt(u32, args[2], 10) catch |err| {
             std.debug.print("{any}", .{err});
             return 1;
@@ -55,12 +67,14 @@ pub fn main() anyerror!u8 {
     };
     defer cell_grid.deinit();
 
-    const screen_width: i32 = 800;
-    const screen_height: i32 = 450;
+    const screen_width: i32 = 1280;
+    const screen_height: i32 = 720;
 
     rl.initWindow(screen_width, screen_height, "Conway");
     defer rl.closeWindow();
     rl.setTargetFPS(60);
+
+    var game_phase = Game_phase.PREP;
 
     const img: rl.Image = .{
         .data = @ptrCast(cell_grid.rgba32),
@@ -73,12 +87,39 @@ pub fn main() anyerror!u8 {
         std.debug.print("{any}", .{err});
         return 1;
     };
-
+    const srect = rl.Rectangle.init(0, 0, @as(f32, @floatFromInt(texture.width)), @as(f32, @floatFromInt(texture.height)));
+    const drect = scale_texture_to_screen(texture, screen_width, screen_height);
     while (!rl.windowShouldClose()) {
+        const key = rl.getKeyPressed();
+
+        if (key == rl.KeyboardKey.space) {
+            game_phase = Game_phase.RUNNING;
+        }
+
+        if (game_phase == Game_phase.PREP) {
+            const clicked = rl.isMouseButtonPressed(rl.MouseButton.left);
+
+            if (clicked == true) {
+                const mouse_pos = rl.getMousePosition();
+                const tex_w: u32 = cell_grid.w_offset * 64;
+                const tex_h: u32 = grid_h;
+
+                const cell_clicked = get_clicked_cell(mouse_pos.x, mouse_pos.y, screen_width, screen_height, tex_w, tex_h);
+                const gx: usize = @intFromFloat(cell_clicked.x);
+                const gy: usize = @intFromFloat(cell_clicked.y);
+
+                if (gx < grid_w and gy < grid_h) {
+                    _ = cell_grid.flip_bit_at(gx, gy);
+                    cell_grid.map_grid_to_rgba32();
+                    rl.updateTexture(texture, cell_grid.rgba32.ptr);
+                }
+            }
+        } else {}
         rl.beginDrawing();
         defer rl.endDrawing();
+
         rl.clearBackground(.white);
-        rl.drawTexture(texture, 0, 0, rl.Color.ray_white);
+        rl.drawTexturePro(texture, srect, drect, rl.Vector2.init(0.0, 0.0), 0.0, rl.Color.white);
     }
     return 0;
 }
