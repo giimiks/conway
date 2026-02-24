@@ -130,6 +130,7 @@ pub fn main() anyerror!u8 {
                 }
             }
         } else {
+            //wtf
             if (true) {
                 cell_grid.advance_life();
 

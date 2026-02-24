@@ -109,11 +109,12 @@ pub const Cell_grid = struct {
             }
         }
     }
-
+    ///Traverses neigbhbours and counts neighbours
     pub fn get_neighbour_count(self: *Cell_grid, x: u64, y: u64, grid: []u64) u8 {
         var neighbour_count: u8 = 0;
 
         for (0..3) |i| {
+            if (neighbour_count > 3) break;
             const offs_x_i: i64 = @as(i64, @intCast(x)) + @as(i64, @intCast(i)) - 1;
             if (offs_x_i < 0 or offs_x_i >= self.width) continue;
             const offs_x: u64 = @intCast(offs_x_i);
