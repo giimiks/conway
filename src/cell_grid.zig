@@ -133,6 +133,7 @@ pub const Cell_grid = struct {
 
         return neighbour_count;
     }
+    ///Advance the next frame
     pub fn advance_life(self: *Cell_grid) void {
         @memcpy(self.next_grid, self.grid);
 
