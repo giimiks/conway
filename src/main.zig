@@ -72,7 +72,7 @@ pub fn main() anyerror!u8 {
 
     rl.initWindow(screen_width, screen_height, "Conway");
     defer rl.closeWindow();
-    rl.setTargetFPS(60);
+    rl.setTargetFPS(1000);
 
     var game_phase = Game_phase.PREP;
 
@@ -89,15 +89,22 @@ pub fn main() anyerror!u8 {
     };
     const srect = rl.Rectangle.init(0, 0, @as(f32, @floatFromInt(texture.width)), @as(f32, @floatFromInt(texture.height)));
     const drect = scale_texture_to_screen(texture, screen_width, screen_height);
+
+    var conway_frame_time: f32 = 0;
     while (!rl.windowShouldClose()) {
         const key = rl.getKeyPressed();
+        const dt = rl.getFrameTime();
+        conway_frame_time += dt;
 
         if (key == rl.KeyboardKey.space) {
             game_phase = Game_phase.RUNNING;
         }
+        if (key == rl.KeyboardKey.q) {
+            game_phase = Game_phase.PREP;
+        }
 
         if (game_phase == Game_phase.PREP) {
-            const clicked = rl.isMouseButtonPressed(rl.MouseButton.left);
+            const clicked = rl.isMouseButtonDown(rl.MouseButton.left);
 
             if (clicked == true) {
                 const mouse_pos = rl.getMousePosition();
@@ -109,17 +116,34 @@ pub fn main() anyerror!u8 {
                 const gy: usize = @intFromFloat(cell_clicked.y);
 
                 if (gx < grid_w and gy < grid_h) {
-                    _ = cell_grid.flip_bit_at(gx, gy);
+                    const flipped = cell_grid.flip_bit_at(gx, gy, cell_grid.grid);
+                    if (flipped == true) {
+                        cell_grid.alive_add(gx, gy) catch |err| {
+                            std.debug.print("{any}", .{err});
+                            return 1;
+                        };
+                    } else {
+                        cell_grid.alive_delete(gx, gy);
+                    }
                     cell_grid.map_grid_to_rgba32();
                     rl.updateTexture(texture, cell_grid.rgba32.ptr);
                 }
             }
-        } else {}
+        } else {
+            if (true) {
+                cell_grid.advance_life();
+
+                cell_grid.map_grid_to_rgba32();
+                rl.updateTexture(texture, cell_grid.rgba32.ptr);
+                conway_frame_time = 0.0;
+            }
+        }
         rl.beginDrawing();
         defer rl.endDrawing();
 
         rl.clearBackground(.white);
         rl.drawTexturePro(texture, srect, drect, rl.Vector2.init(0.0, 0.0), 0.0, rl.Color.white);
+        rl.drawFPS(0, 0);
     }
     return 0;
 }
