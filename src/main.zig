@@ -20,13 +20,8 @@ fn get_clicked_cell(mx: f32, my: f32, screen_w: i32, screen_h: i32, tex_w: u32, 
     return rl.Vector2{ .x = @floor(pos_x), .y = @floor(pos_y) };
 }
 
-fn conway_advance(celg: cg.Cell_grid) void {
-    for (0..celg.width) |w| {
-        for (0..celg.height) |h| {
-            const cell = celg.get_bit_at(w, h);
-            if (cell == true) {}
-        }
-    }
+inline fn update_rate(rate: f32) f32 {
+    return 1.0 / rate;
 }
 
 pub fn main() anyerror!u8 {
@@ -35,27 +30,37 @@ pub fn main() anyerror!u8 {
 
     const allocator = gpa.allocator();
 
-    var grid_w: u32 = 0;
-    var grid_h: u32 = 0;
+    var grid_w: u32 = 32;
+    var grid_h: u32 = 32;
+    var update_time: f32 = 0.2;
 
     const args = try std.process.argsAlloc(allocator);
-    if (args.len < 3) {
-        std.debug.print("grid width and height not provided -> defaulting to 32x32\n", .{});
-        grid_h = 32;
-        grid_w = 32;
-    } else {
-        grid_w = std.fmt.parseInt(u32, args[1], 10) catch |err| {
-            std.debug.print("{any}", .{err});
-            return 0;
-        };
+    defer std.process.argsFree(allocator, args);
 
-        grid_h = std.fmt.parseInt(u32, args[2], 10) catch |err| {
-            std.debug.print("{any}", .{err});
+    if (args.len > 1) {
+        grid_w = std.fmt.parseInt(u32, args[1], 10) catch {
+            std.debug.print("invalid grid width\n", .{});
             return 1;
         };
     }
-    if (grid_h == 0 or grid_w == 0) {
-        std.debug.print("height or width can't be 0", .{});
+
+    if (args.len > 2) {
+        grid_h = std.fmt.parseInt(u32, args[2], 10) catch {
+            std.debug.print("invalid grid height\n", .{});
+            return 1;
+        };
+    }
+
+    if (args.len > 3) {
+        const rate = std.fmt.parseFloat(f32, args[3]) catch {
+            std.debug.print("invalid update rate\n", .{});
+            return 1;
+        };
+        update_time = 1.0 / rate;
+    }
+
+    if (grid_w == 0 or grid_h == 0) {
+        std.debug.print("grid size must be > 0\n", .{});
         return 1;
     }
 
@@ -72,7 +77,10 @@ pub fn main() anyerror!u8 {
 
     rl.initWindow(screen_width, screen_height, "Conway");
     defer rl.closeWindow();
-    rl.setTargetFPS(1000);
+    rl.setTargetFPS(0);
+    rl.setConfigFlags(rl.ConfigFlags{
+        .window_resizable = true,
+    });
 
     var game_phase = Game_phase.PREP;
 
@@ -95,7 +103,11 @@ pub fn main() anyerror!u8 {
         const key = rl.getKeyPressed();
         const dt = rl.getFrameTime();
         conway_frame_time += dt;
-
+        if (key == rl.KeyboardKey.r) {
+            cell_grid.randomize();
+            cell_grid.map_grid_to_rgba32();
+            rl.updateTexture(texture, cell_grid.rgba32.ptr);
+        }
         if (key == rl.KeyboardKey.space) {
             game_phase = Game_phase.RUNNING;
         }
@@ -104,7 +116,7 @@ pub fn main() anyerror!u8 {
         }
 
         if (game_phase == Game_phase.PREP) {
-            const clicked = rl.isMouseButtonDown(rl.MouseButton.left);
+            const clicked = rl.isMouseButtonPressed(rl.MouseButton.left);
 
             if (clicked == true) {
                 const mouse_pos = rl.getMousePosition();
@@ -130,12 +142,12 @@ pub fn main() anyerror!u8 {
                 }
             }
         } else {
-            //wtf
-            if (true) {
+            if (conway_frame_time >= update_time) {
                 cell_grid.advance_life();
 
                 cell_grid.map_grid_to_rgba32();
                 rl.updateTexture(texture, cell_grid.rgba32.ptr);
+
                 conway_frame_time = 0.0;
             }
         }
@@ -144,7 +156,7 @@ pub fn main() anyerror!u8 {
 
         rl.clearBackground(.white);
         rl.drawTexturePro(texture, srect, drect, rl.Vector2.init(0.0, 0.0), 0.0, rl.Color.white);
-        rl.drawFPS(0, 0);
+        rl.drawFPS(screen_width - 100, 0);
     }
     return 0;
 }

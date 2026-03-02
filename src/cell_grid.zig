@@ -21,7 +21,7 @@ const LUT = buildByteLut();
 
 pub const Cell_xy = struct { x: u64, y: u64 };
 
-///Grid is a u64 array bitmap stored row-wise. Use .init() to initialise the grid safely with zeroed out memory. Use .deinit() to dealocate.
+///Grid is a u64 array bitmap stored row-wise. Use .init() to initialise the grid safely with zeroed out memory. Use .deinit() to deallocate.
 pub const Cell_grid = struct {
     width: u32,
     height: u32,
@@ -134,27 +134,202 @@ pub const Cell_grid = struct {
 
         return neighbour_count;
     }
+    fn halfAdd(a: u64, b: u64) struct { sum: u64, carry: u64 } {
+        return .{
+            .sum = a ^ b,
+            .carry = a & b,
+        };
+    }
+
+    fn fullAdd(a: u64, b: u64, c: u64) struct { sum: u64, carry: u64 } {
+        const s = a ^ b ^ c;
+        const carry = (a & b) | (a & c) | (b & c);
+        return .{ .sum = s, .carry = carry };
+    }
+    inline fn load(grid: []u64, idx: usize, ok: bool) u64 {
+        return if (ok) grid[idx] else 0;
+    }
+
+    inline fn lifeRule(mid: u64, bit0: u64, bit1: u64, bit2: u64) u64 {
+        const is3 = (~bit2) & bit1 & bit0;
+        const is2 = (~bit2) & bit1 & (~bit0);
+        return is3 | (mid & is2);
+    }
     ///Advance the next frame
+    ///
+    /// TODO: Make this use the list of alive cells
     pub fn advance_life(self: *Cell_grid) void {
-        @memcpy(self.next_grid, self.grid);
+        const h: usize = @intCast(self.height);
+        const wpr: usize = @intCast(self.w_offset);
+        const w: usize = @intCast(self.width);
+        const rem: u6 = @intCast(w & 63);
+        const last_mask: u64 = if (rem == 0) ~@as(u64, 0) else (@as(u64, 1) << rem) - 1;
 
-        for (0..self.width) |x| {
-            for (0..self.height) |y| {
-                const nc = self.get_neighbour_count(x, y, self.grid);
-                const alive = self.get_bit_at(x, y, self.grid);
+        for (0..h) |y| {
+            const row = y * wpr;
 
-                if (alive) {
-                    if (nc < 2 or nc > 3) {
-                        _ = self.flip_bit_at(x, y, self.next_grid);
-                    }
-                } else {
-                    if (nc == 3) {
-                        _ = self.flip_bit_at(x, y, self.next_grid);
-                    }
-                }
+            const top_valid = y > 0;
+            const bot_valid = (y + 1) < h;
+
+            const top_row = if (top_valid) (y - 1) * wpr else 0;
+            const bot_row = if (bot_valid) (y + 1) * wpr else 0;
+
+            for (0..wpr) |xword| {
+                const has_l = xword > 0;
+                const has_r = (xword + 1) < wpr;
+
+                const top_c = if (top_valid) self.grid[top_row + xword] else 0;
+                const mid_c = self.grid[row + xword];
+                const bot_c = if (bot_valid) self.grid[bot_row + xword] else 0;
+
+                const top_l = if (top_valid and has_l) self.grid[top_row + (xword - 1)] else 0;
+                const top_r = if (top_valid and has_r) self.grid[top_row + (xword + 1)] else 0;
+
+                const mid_l = if (has_l) self.grid[row + (xword - 1)] else 0;
+                const mid_r = if (has_r) self.grid[row + (xword + 1)] else 0;
+
+                const bot_l = if (bot_valid and has_l) self.grid[bot_row + (xword - 1)] else 0;
+                const bot_r = if (bot_valid and has_r) self.grid[bot_row + (xword + 1)] else 0;
+                //Bit operation magic
+                const top_left = (top_c << 1) | (top_r >> 63);
+                const top_right = (top_c >> 1) | (top_l << 63);
+
+                const mid_left = (mid_c << 1) | (mid_r >> 63);
+                const mid_right = (mid_c >> 1) | (mid_l << 63);
+
+                const bot_left = (bot_c << 1) | (bot_r >> 63);
+                const bot_right = (bot_c >> 1) | (bot_l << 63);
+
+                const a = top_left;
+                const b = top_c;
+                const c = top_right;
+                const d = mid_left;
+                const e = mid_right;
+                const f = bot_left;
+                const g = bot_c;
+                const hh = bot_right;
+
+                const s1 = fullAdd(a, b, c);
+                const s2 = fullAdd(d, e, f);
+                const s3 = halfAdd(g, hh);
+
+                const s4 = fullAdd(s1.sum, s2.sum, s3.sum);
+                const c1 = fullAdd(s1.carry, s2.carry, s3.carry);
+
+                const bit0 = s4.sum;
+                const bit1 = s4.carry ^ c1.sum;
+                const bit2 = c1.carry;
+
+                const is3 = (~bit2) & bit1 & bit0;
+                const is2 = (~bit2) & bit1 & (~bit0);
+
+                var next = is3 | (mid_c & is2);
+
+                if (xword + 1 == wpr) next &= last_mask;
+
+                self.next_grid[row + xword] = next;
             }
         }
 
-        @memcpy(self.grid, self.next_grid);
+        const tmp = self.grid;
+        self.grid = self.next_grid;
+        self.next_grid = tmp;
+    }
+    pub fn advance_life_par(self: *Cell_grid, low: usize, up: usize) void {
+        const h: usize = @intCast(self.height);
+        const wpr: usize = @intCast(self.w_offset);
+        const w: usize = @intCast(self.width);
+        const rem: u6 = @intCast(w & 63);
+        const last_mask: u64 = if (rem == 0) ~@as(u64, 0) else (@as(u64, 1) << rem) - 1;
+
+        const y_end = @min(up, h);
+
+        for (low..y_end) |y| {
+            const row = y * wpr;
+
+            const top_valid = y > 0;
+            const bot_valid = (y + 1) < h;
+
+            const top_row = if (top_valid) (y - 1) * wpr else 0;
+            const bot_row = if (bot_valid) (y + 1) * wpr else 0;
+
+            for (0..wpr) |xword| {
+                const has_l = xword > 0;
+                const has_r = (xword + 1) < wpr;
+
+                const top_c = if (top_valid) self.grid[top_row + xword] else 0;
+                const mid_c = self.grid[row + xword];
+                const bot_c = if (bot_valid) self.grid[bot_row + xword] else 0;
+
+                const top_l = if (top_valid and has_l) self.grid[top_row + (xword - 1)] else 0;
+                const top_r = if (top_valid and has_r) self.grid[top_row + (xword + 1)] else 0;
+
+                const mid_l = if (has_l) self.grid[row + (xword - 1)] else 0;
+                const mid_r = if (has_r) self.grid[row + (xword + 1)] else 0;
+
+                const bot_l = if (bot_valid and has_l) self.grid[bot_row + (xword - 1)] else 0;
+                const bot_r = if (bot_valid and has_r) self.grid[bot_row + (xword + 1)] else 0;
+
+                const top_left = (top_c << 1) | (top_r >> 63);
+                const top_right = (top_c >> 1) | (top_l << 63);
+
+                const mid_left = (mid_c << 1) | (mid_r >> 63);
+                const mid_right = (mid_c >> 1) | (mid_l << 63);
+
+                const bot_left = (bot_c << 1) | (bot_r >> 63);
+                const bot_right = (bot_c >> 1) | (bot_l << 63);
+
+                const a = top_left;
+                const b = top_c;
+                const c = top_right;
+                const d = mid_left;
+                const e = mid_right;
+                const f = bot_left;
+                const g = bot_c;
+                const hh = bot_right;
+
+                const s1 = fullAdd(a, b, c);
+                const s2 = fullAdd(d, e, f);
+                const s3 = halfAdd(g, hh);
+
+                const s4 = fullAdd(s1.sum, s2.sum, s3.sum);
+                const c1 = fullAdd(s1.carry, s2.carry, s3.carry);
+
+                const bit0 = s4.sum;
+                const bit1 = s4.carry ^ c1.sum;
+                const bit2 = c1.carry;
+
+                const is3 = (~bit2) & bit1 & bit0;
+                const is2 = (~bit2) & bit1 & (~bit0);
+
+                var next = is3 | (mid_c & is2);
+
+                if (xword + 1 == wpr) next &= last_mask;
+
+                self.next_grid[row + xword] = next;
+            }
+        }
+    }
+
+    pub fn randomize(self: *Cell_grid) void {
+        var prng = std.Random.DefaultPrng.init(@intCast(std.time.nanoTimestamp()));
+        var random = prng.random();
+
+        const total_words = self.w_offset * self.height;
+
+        for (0..total_words) |i| {
+            self.grid[i] = random.int(u64);
+        }
+
+        const remainder = self.width & 63;
+
+        if (remainder != 0) {
+            const mask: u64 = (@as(u64, 1) << @intCast(remainder)) - 1;
+
+            for (0..self.height) |y| {
+                const idx = y * self.w_offset + (self.w_offset - 1);
+                self.grid[idx] &= mask;
+            }
+        }
     }
 };
